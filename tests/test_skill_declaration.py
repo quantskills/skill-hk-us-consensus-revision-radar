@@ -209,6 +209,8 @@ class SkillDeclarationTests(unittest.TestCase):
             "references/pandadata-api-map.md",
             "config/defaults.json",
             "agents/openai.yaml",
+            "agents/cursor-rule.mdc",
+            "agents/portable-loader.md",
         ):
             self.assertTrue((ROOT / name).is_file(), name)
         eval_text = (ROOT / "evals" / "evals.json").read_text(encoding="utf-8")
@@ -238,6 +240,24 @@ class SkillDeclarationTests(unittest.TestCase):
             "$skill-hk-us-consensus-revision-radar",
         ):
             self.assertIn(expected, ui)
+
+    def test_community_runtime_adapters_and_gpl_license_are_declared(self):
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        cursor = (ROOT / "agents" / "cursor-rule.mdc").read_text(encoding="utf-8")
+        hermes = (ROOT / "agents" / "portable-loader.md").read_text(encoding="utf-8")
+        license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+        readmes = "\n".join(
+            (ROOT / name).read_text(encoding="utf-8")
+            for name in ("README.md", "README.en.md")
+        )
+
+        self.assertIn("license: GPL-3.0-only", skill)
+        self.assertIn("../SKILL.md", cursor)
+        self.assertIn("../SKILL.md", hermes)
+        self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)
+        self.assertIn("Version 3, 29 June 2007", license_text)
+        self.assertIn("GPL-3.0-only", readmes)
+        self.assertNotIn("MIT License", readmes)
 
 
 if __name__ == "__main__":

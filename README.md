@@ -134,4 +134,4 @@ PandaData 是本项目的**唯一原始数据源**；不使用其他数据源补
 
 ## 贡献与许可证
 
-欢迎通过 issue 和 review 提出改进建议。该项目是未审查的 QuantSkills Community Project；PandaData SDK 和数据服务适用其各自条款。本代码采用 [MIT License](LICENSE)。
+欢迎通过 issue 和 review 提出改进建议。该项目是未审查的 QuantSkills Community Project；PandaData SDK 和数据服务适用其各自条款。本代码采用 [GNU GPL v3.0（GPL-3.0-only）](LICENSE)。

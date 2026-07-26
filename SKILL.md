@@ -9,6 +9,7 @@ metadata:
   project_type: skill
   collection: consensus-intelligence
   status: community-project-unreviewed
+  license: GPL-3.0-only
 ---
 
 # HK/US Consensus Revision Radar
