@@ -1,6 +1,6 @@
-# HK/US Consensus Revision Radar
+# HK/US Consensus Revision Radar: Trajectory Matrix & State Machine
 
-A QuantSkills Community Project that uses **PandaData** to research target-price revisions, recommendation changes, target-price dispersion, and price-versus-consensus divergence for Hong Kong and US equities. It generates a standalone HTML research report that can be opened offline.
+A QuantSkills Community Project powered by **PandaData**. Its focus is not a point-in-time consensus snapshot: it turns Hong Kong and US target-price and recommendation changes into a **consensus revision radar** with a five-horizon Revision Trajectory Matrix, a rule-based Consensus State Machine, and an auditable offline HTML research report.
 
 > This project has not been reviewed or endorsed by QuantSkills. It is for research and education only, is not investment advice, and does not provide trade instructions, return promises, or position recommendations.
 
@@ -8,6 +8,10 @@ A QuantSkills Community Project that uses **PandaData** to research target-price
 
 ## Core capabilities
 
+- **Revision-radar positioning**: prioritize cross-horizon target-price and recommendation changes instead of merely listing current ratings, targets, or upside.
+- **Revision Trajectory Matrix**: place weekly, 1/3/6/12-month target-price and recommendation changes in one searchable matrix to surface persistent upgrades, deceleration, reversals, and conflicting signals.
+- **Consensus State Machine**: interpret aggregate evidence through states such as persistent upgrade, accelerating upgrade, target-price/recommendation resonance, and high-dispersion review. States do not alter rankings and do not represent individual analyst actions.
+- **Auditable HTML delivery**: package actual interfaces, time basis, formulas, eligibility funnels, missing values, validations, and limitations into a single offline file that can be reviewed without network access.
 - Collect, calculate, and rank Hong Kong and US securities separately across `week`, `1month`, `3month`, `6month`, and `12month` horizons.
 - Produce target-price upgrade/downgrade, high-dispersion, recommendation-change, and price-versus-consensus divergence rankings with documented calculations.
 - Provide a **Revision Trajectory Matrix** showing target-price and recommendation changes, values, and directions over five lookback horizons; search by security name or symbol.
@@ -92,7 +96,7 @@ python -m scripts.run_report --market both --no-events
 
 ### Trajectories and security interpretation
 
-The Revision Trajectory Matrix and security trajectory display aggregate target-price and recommendation changes across five horizons. States such as “persistent upgrade”, “target-price and recommendation resonance”, or “high-dispersion review” explain aggregate evidence only. They do not change rankings and are not individual analyst revision records.
+The primary reading path is **Revision Trajectory Matrix → Consensus State Machine → auditable security evidence**, rather than a one-point consensus lookup. The matrix and security trajectory display aggregate target-price and recommendation changes across five horizons. States such as “persistent upgrade”, “target-price and recommendation resonance”, or “high-dispersion review” explain aggregate evidence only. They do not change rankings and are not individual analyst revision records.
 
 Event context is explanatory only and does not change rankings. The data-completeness section discloses called interfaces, missing inputs, price fallback, core-universe exclusions, and validation information; it is collapsed by default to keep the report focused.
 
@@ -115,6 +119,7 @@ PandaData is the **only raw data source** for this project; no other provider is
 
 ## Auditable design
 
+- **More than a snapshot report**: the revision radar, trajectory matrix, and state machine are the primary deliverables; current target price and recommendation are merely the current anchors for those trajectories.
 - **Conservative universe**: detail endpoints validate security identity, status, and asset category. Non-core securities do not enter rankings but remain in diagnostics.
 - **Per-symbol price fallback**: query the requested trading day first, then retry every missing, nonnumeric, or nonpositive close over the preceding 14 calendar days, regardless of aggregate match rate.
 - **No invented values**: missing inputs remain missing; the skill does not replace them with zeroes, prior values, or third-party data. Dependent measures and rankings show exclusions explicitly.

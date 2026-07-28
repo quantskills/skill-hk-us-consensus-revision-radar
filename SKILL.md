@@ -1,6 +1,6 @@
 ---
 name: skill-hk-us-consensus-revision-radar
-description: "Use when a user wants to examine Hong Kong or US equity target-price revisions, recommendation changes, analyst disagreement, or price-versus-consensus divergence using PandaData only, and produce a standalone offline HTML research report. Do not use for ETFs, daily snapshots, scheduling, trade execution, buy/sell instructions, or return forecasts."
+description: "Use when a user wants an auditable Hong Kong or US equity consensus revision radar: compare target-price and recommendation changes across five horizons, inspect the revision trajectory matrix and rule-based consensus state machine, and produce a standalone offline HTML research report using PandaData only. Do not use for ETFs, daily snapshots, scheduling, trade execution, buy/sell instructions, or return forecasts."
 metadata:
   organization: QuantSkills
   organization_url: https://github.com/quantskills
@@ -12,9 +12,9 @@ metadata:
   license: GPL-3.0-only
 ---
 
-# HK/US Consensus Revision Radar
+# HK/US Consensus Revision Radar: Trajectory Matrix & State Machine
 
-Generate an auditable, standalone HTML report for Hong Kong and US equity consensus revisions. All raw market and consensus data must come from PandaData. Derived metrics are deterministic calculations documented in [references/methodology.md](references/methodology.md).
+Generate an auditable, standalone HTML **consensus revision radar** for Hong Kong and US equities. The core output is not a point-in-time consensus snapshot: it reconstructs five-horizon aggregate revision trajectories, organizes them into a searchable revision trajectory matrix, and explains each security through a rule-based consensus state machine. All raw market and consensus data must come from PandaData. Derived metrics are deterministic calculations documented in [references/methodology.md](references/methodology.md).
 
 ## Required first step: authenticate
 
@@ -78,6 +78,7 @@ python -m scripts.run_report --market both --symbols 0700.HK,9988.HK,AAPL,NVDA -
 The HTML report must include:
 
 - a key-findings brief before charts, covering the largest upgrade, downgrade, analyst dispersion, and recommendation change;
+- a clear positioning note that distinguishes this revision radar from a point-in-time consensus report: cross-horizon trajectory, state interpretation, and offline auditability are the primary deliverables;
 - a data-completeness block at the end of the report whenever PandaData price, historical, name, recommendation, or analyst-coverage inputs are missing;
 - the data-completeness block is collapsed by default (`collapsed by default`) with a keyboard-accessible disclosure control; basic disclosure remains available when JavaScript is unavailable (`JavaScript is unavailable`);
 - restrained motion for view changes and numeric emphasis, with a `reduced-motion` fallback;
@@ -138,6 +139,7 @@ Maintained by community contributors through the repository issue and review pro
 
 ## 修订轨迹与状态解读
 
+- 本 Skill 的重点是将多个回看期的聚合一致预期变化组织为“修订轨迹矩阵 + 一致预期状态机 + 可审计离线 HTML”，而不是只展示某一时点的评级或目标价快照。
 - 报告按周度、1个月、3个月、6个月、12个月展示目标价与评级的五个回看期；每个轨迹单元格同时显示符号、数值和方向文字，缺失值为 `—`。
 - 八种规则化状态为：持续上修、上修加速、上修减速、趋势反转待核验、目标价与评级共振改善、目标价与评级信号冲突、高分歧待核验、覆盖变化待核验。状态只用于解读，不改变榜单排序，不是分析师个人修订，也不构成投资建议。
 - 评级均值越低代表评级更积极（绝对水平）。评级变化公式为“历史评级均值 − 当前评级均值”；历史评级均值 − 当前评级均值越大代表评级改善/更积极（变化）。高分歧以有效核心样本 P75 为阈值；覆盖变化沿用既有绝对变化不少于 2 且变化率不少于 20% 的规则。

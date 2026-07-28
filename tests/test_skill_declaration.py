@@ -234,8 +234,8 @@ class SkillDeclarationTests(unittest.TestCase):
             self.assertIn(expected, skill)
 
         for expected in (
-            'display_name: "港美股一致预期修订雷达"',
-            'short_description: "基于 PandaData 生成港美股一致预期修订离线报告"',
+            'display_name: "港美股一致预期修订雷达：轨迹矩阵与状态机"',
+            'short_description: "修订轨迹矩阵、状态机与可审计 HTML 雷达"',
             "default_prompt:",
             "$skill-hk-us-consensus-revision-radar",
         ):
