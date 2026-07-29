@@ -25,7 +25,7 @@ At the beginning of every invocation, before any PandaData query:
 3. A non-TTY caller must stop before authentication or data access unless it has intentionally requested `--desktop-login-window` from a GUI-capable desktop host. This flag represents caller intent only: process creation only means the window was requested, not that it is visible. Restricted or background hosts can suppress the helper window as a host limitation rather than an authentication failure.
 4. Never request or accept a password in chat, screenshots, CLI arguments, files, logs, or report content.
 5. Normalize only an 11-digit mainland mobile username by adding the `86` prefix; preserve an already-prefixed or non-mobile username unchanged.
-6. Call the bundled authentication adapter so the PandaData SDK keeps authentication state only in process memory and does not create `user.json`.
+6. Call the bundled authentication adapter so the PandaData SDK keeps authentication state only in process memory and does not create `user.json`. When a local login helper is used, transfer only its verified short-lived session token to the parent process over the authenticated loopback relay; never transfer the password back or issue a second login request.
 7. Clear the in-memory authentication state when the run finishes or fails.
 
 ## Workflow
@@ -61,7 +61,7 @@ python3 -m scripts.run_report --market both --horizon 1month --min-analysts 5 --
 When the Terminal window opens, type the username and press Return. Type the password and press Return; macOS shows no password characters or placeholder dots. The password is held only in process memory and is cleared after the run.
 
 If PandaData returns an authentication failure, the login window must display a clear authentication failure message and immediately prompt the user to re-enter both the username and password. Do not reuse either value from the failed attempt, echo or persist the password, and continue retrying until authentication succeeds or the user cancels/closes the prompt.
-After credentials are submitted, the local login window must show only whether PandaData connection succeeded or failed. The main Codex/terminal process receives the remaining progress events for each market's consensus/price/name collection, analysis, report writing, and final output path. Keep credentials in process memory and flush progress messages immediately so a slow API call never appears frozen.
+After credentials are submitted, the local login window must immediately show that PandaData login is in progress, then clearly show success or failure. On success, it must transfer only a verified short-lived session token to the parent process over the authenticated local relay; the parent must reuse that session without re-entering the password or calling the login endpoint again. On failure, show that both credentials must be re-entered. The main Codex/terminal process receives the remaining progress events for each market's consensus/price/name collection, analysis, report writing, and final output path. Keep credentials and tokens in process memory and flush progress messages immediately so a slow API call never appears frozen.
 
 For a focused sample:
 

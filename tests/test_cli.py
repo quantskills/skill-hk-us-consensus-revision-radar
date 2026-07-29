@@ -8,13 +8,13 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from scripts.auth_session import AuthenticationError, CredentialError, Credentials
+from scripts.auth_session import AuthenticationError, CredentialError, Credentials, SessionGrant
 from scripts.analysis import build_consensus_states, build_rankings, compute_metrics
 from scripts.event_context import EVENT_APIS
 from scripts.run_report import (
     WorkflowOptions, _ProgressRelay, _build_login_window_command, _handle_parent_event,
     _event_scope_symbols, _launch_login_window, _market_payload, _quality_warnings, _run_login_helper,
-    _validate_options,
+    _progress_status_reporter, _validate_options,
     build_parser, main, run_workflow,
 )
 
@@ -115,25 +115,58 @@ class FakePanda:
 
 class CliWorkflowTests(unittest.TestCase):
     def test_login_helper_only_verifies_credentials(self):
-        credentials = Credentials("research-user", "local-secret")
-        session = SimpleNamespace(close=lambda: None)
+        grant = SessionGrant(
+            access_token="short-lived-token",
+            username="research-user",
+            base_url="http://pandadata.example",
+            expires_in_seconds=3600,
+        )
+        session = SimpleNamespace(grant=grant, close=lambda: None)
         relay = SimpleNamespace(
-            credentials=lambda value: setattr(relay, "received", value),
+            progress=lambda message: setattr(relay, "progress_message", message),
+            authenticated_session=lambda value: setattr(relay, "received", value),
             auth_failure=lambda: None,
             error=lambda message: setattr(relay, "error_message", message),
         )
         fake_panda = SimpleNamespace()
         with (
             patch.dict("sys.modules", {"panda_data": fake_panda}),
-            patch("scripts.run_report.resolve_credentials", return_value=credentials),
+            patch("scripts.run_report.resolve_credentials", return_value=Credentials("research-user", "local-secret")),
             patch("scripts.run_report.authenticate", return_value=session),
             patch("scripts.run_report.run_workflow") as workflow,
         ):
             result = _run_login_helper(relay)
 
         self.assertEqual(result, 0)
-        self.assertIs(relay.received, credentials)
+        self.assertIs(relay.received, grant)
+        self.assertEqual(relay.progress_message, "PandaData 登录成功，正在启动报告任务...")
         workflow.assert_not_called()
+
+    def test_progress_relay_echoes_authentication_status_to_terminal(self):
+        relay = _ProgressRelay("127.0.0.1", 43210, "token")
+        stream = io.StringIO()
+        with (
+            patch.object(_ProgressRelay, "_send"),
+            patch("scripts.run_report.sys.stderr", stream),
+        ):
+            relay.progress("账号和密码已接收，正在登录 PandaData...")
+            relay.auth_failure()
+
+        message = stream.getvalue()
+        self.assertIn("账号和密码已接收，正在登录 PandaData...", message)
+        self.assertIn("PandaData 登录失败，请重新输入账号和密码。", message)
+
+    def test_progress_relay_preserves_safe_authentication_category(self):
+        relay = _ProgressRelay("127.0.0.1", 43210, "token")
+        stream = io.StringIO()
+
+        with (
+            patch.object(_ProgressRelay, "_send"),
+            patch("scripts.run_report.sys.stderr", stream),
+        ):
+            relay.auth_failure("PandaData login failed: request rejected by the service (HTTP 401).")
+
+        self.assertIn("HTTP 401", stream.getvalue())
 
     def test_interactive_auth_failure_reprompts_password_and_retries(self):
         first_credentials = Credentials("research-user", "wrong-secret")
@@ -570,9 +603,64 @@ class CliWorkflowTests(unittest.TestCase):
             result = main(["--market", "both", "--desktop-login-window"])
 
         self.assertEqual(result, 0)
-        launcher.assert_called_once_with(
+        launcher.assert_called_once()
+        self.assertEqual(
+            launcher.call_args.args[0],
             ["--market", "both", "--desktop-login-window"],
         )
+        self.assertTrue(callable(launcher.call_args.kwargs["progress_callback"]))
+
+    def test_parser_accepts_progress_file_for_external_run_monitoring(self):
+        args = build_parser().parse_args(["--progress-file", "output/run-status.json"])
+
+        self.assertEqual(args.progress_file, "output/run-status.json")
+
+    def test_progress_status_reporter_writes_latest_safe_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "run-status.json"
+            reporter = _progress_status_reporter(destination)
+
+            reporter("正在获取 HK 数据（1/2）...")
+
+            status = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(status["message"], "正在获取 HK 数据（1/2）...")
+        self.assertIn("updated_at", status)
+
+    def test_main_forwards_workflow_progress_to_external_status_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "run-status.json"
+            credentials = Credentials("research-user", "local-secret")
+
+            def workflow(*_args, **kwargs):
+                kwargs["progress_callback"]("HK 数据获取完成，正在分析...")
+                return Path("output/report.html")
+
+            with (
+                patch.dict("sys.modules", {"panda_data": SimpleNamespace()}),
+                patch("scripts.run_report.resolve_credentials", return_value=credentials),
+                patch("scripts.run_report.run_workflow", side_effect=workflow),
+            ):
+                result = main(["--market", "hk", "--progress-file", str(destination)])
+
+            status = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(result, 0)
+        self.assertEqual(status["message"], "HK 数据获取完成，正在分析...")
+
+    def test_main_writes_failure_status_to_external_monitor(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "run-status.json"
+            credentials = Credentials("research-user", "local-secret")
+
+            with (
+                patch.dict("sys.modules", {"panda_data": SimpleNamespace()}),
+                patch("scripts.run_report.resolve_credentials", return_value=credentials),
+                patch("scripts.run_report.run_workflow", side_effect=RuntimeError("service unavailable")),
+            ):
+                result = main(["--market", "hk", "--progress-file", str(destination)])
+
+            status = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(result, 1)
+        self.assertEqual(status["message"], "报告生成失败，请查看本地终端。")
 
     def test_parser_exposes_desktop_login_window_flag(self):
         self.assertTrue(build_parser().parse_args(["--desktop-login-window"]).desktop_login_window)
@@ -848,30 +936,63 @@ class CliWorkflowTests(unittest.TestCase):
                 )
         self.assertEqual(panda.events, [])
     def test_main_launches_login_window_when_terminal_is_interactive(self):
-        credentials = Credentials("research-user", "local-secret")
+        grant = SessionGrant(
+            access_token="short-lived-token",
+            username="research-user",
+            base_url="http://pandadata.example",
+            expires_in_seconds=3600,
+        )
         fake_panda = SimpleNamespace()
         with (
             patch.dict("sys.modules", {"panda_data": fake_panda}),
             patch("scripts.run_report.resolve_credentials",
                   side_effect=CredentialError("missing")),
-            patch("scripts.run_report._launch_login_window", return_value=credentials) as launcher,
+            patch("scripts.run_report._launch_login_window", return_value=grant) as launcher,
             patch("scripts.run_report.run_workflow", return_value=Path("output/report.html")) as workflow,
             patch("scripts.run_report.sys.stdin.isatty", return_value=True),
             patch("scripts.run_report.sys.stderr.isatty", return_value=True),
         ):
             result = main(["--market", "hk"])
         self.assertEqual(result, 0)
-        launcher.assert_called_once_with(["--market", "hk"])
-        self.assertIs(workflow.call_args.kwargs["credentials"], credentials)
+        launcher.assert_called_once()
+        self.assertEqual(launcher.call_args.args[0], ["--market", "hk"])
+        self.assertTrue(callable(launcher.call_args.kwargs["progress_callback"]))
+        self.assertIs(workflow.call_args.kwargs["session_grant"], grant)
+        self.assertIsNone(workflow.call_args.kwargs["credentials"])
 
-    def test_parent_event_returns_verified_credentials_without_report_result(self):
+    def test_parent_event_returns_verified_session_without_report_result(self):
         event = {
             "token": "token",
-            "kind": "credentials",
-            "username": "86research-user",
-            "password": "local-secret",
+            "kind": "authenticated_session",
+            "access_token": "short-lived-token",
+            "username": "research-user",
+            "base_url": "http://pandadata.example",
+            "expires_in_seconds": 3600,
         }
         result = _handle_parent_event(event, "token")
-        self.assertEqual(result, Credentials("86research-user", "local-secret"))
+        self.assertEqual(
+            result,
+            SessionGrant(
+                access_token="short-lived-token",
+                username="research-user",
+                base_url="http://pandadata.example",
+                expires_in_seconds=3600,
+            ),
+        )
+
+    def test_parent_event_forwards_authenticated_session_progress_to_monitor(self):
+        messages = []
+        event = {
+            "token": "token",
+            "kind": "authenticated_session",
+            "access_token": "short-lived-token",
+            "username": "research-user",
+            "base_url": "http://pandadata.example",
+            "expires_in_seconds": 3600,
+        }
+
+        _handle_parent_event(event, "token", progress_callback=messages.append)
+
+        self.assertIn("主进程将复用已验证会话", "\n".join(messages))
 if __name__ == "__main__":
     unittest.main()

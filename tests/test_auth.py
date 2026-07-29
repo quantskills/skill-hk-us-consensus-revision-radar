@@ -3,9 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts.auth_session import (
+    AuthenticationError,
     CredentialError,
+    Credentials,
+    SessionGrant,
+    adopt_authenticated_session,
     authenticate,
     normalize_username,
     read_credentials,
@@ -59,6 +64,20 @@ class FakePandaData:
         return "private-token"
 
 
+class RejectingPandaData(FakePandaData):
+    def init_token(self, username, password):
+        self.login_calls.append((username, password))
+        raise RuntimeError("HTTP 401: credential rejected for local-secret")
+
+
+class TokenOnlyPandaData(FakePandaData):
+    BASE_URL = "http://pandadata.example"
+
+    def init_token(self, username, password):
+        self.login_calls.append((username, password))
+        return "private-token"
+
+
 class AuthenticationTests(unittest.TestCase):
     def test_normalizes_only_plain_eleven_digit_mobile_username(self):
         mobile = "1" * 11
@@ -103,6 +122,19 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(credentials.username, "86" + "1" * 11)
         self.assertEqual(credentials.password, "local-secret")
         self.assertEqual(prompts, ["PandaData Username: ", "PandaData Password: "])
+
+    def test_local_input_announces_authentication_after_password(self):
+        status_messages = []
+
+        resolve_credentials(
+            {},
+            interactive=True,
+            username_reader=lambda _prompt: "research-user",
+            password_reader=lambda _prompt: "local-secret",
+            status_writer=status_messages.append,
+        )
+
+        self.assertEqual(status_messages, ["账号和密码已接收，正在登录 PandaData..."])
 
     def test_environment_credentials_do_not_trigger_prompts(self):
         def unexpected_prompt(prompt):
@@ -162,12 +194,71 @@ class AuthenticationTests(unittest.TestCase):
             session = authenticate(panda, credentials)
 
             self.assertFalse(artifact.exists())
+            self.assertEqual(
+                session.grant,
+                SessionGrant(
+                    access_token="private-token",
+                    username="86" + "1" * 11,
+                    base_url="http://pandadata.example",
+                    expires_in_seconds=3600,
+                ),
+            )
             self.assertEqual(panda.login_calls, [("86" + "1" * 11, "example-only")])
             self.assertIs(panda.auth_manager.save_auth_state.__func__, original_save.__func__)
             self.assertEqual(panda.auth_manager._auth_state.token, "private-token")
             session.close()
             self.assertEqual(panda.auth_manager.clear_calls, 1)
             self.assertIsNone(panda.auth_manager._auth_state.token)
+
+    def test_adopting_session_grant_initializes_client_without_login(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "user.json"
+            panda = FakePandaData(artifact)
+            client = SimpleNamespace(init=lambda **kwargs: setattr(client, "kwargs", kwargs))
+            grant = SessionGrant(
+                access_token="short-lived-token",
+                username="research-user",
+                base_url="http://pandadata.example",
+                expires_in_seconds=3600,
+            )
+
+            with patch("scripts.auth_session.importlib.import_module", return_value=client):
+                session = adopt_authenticated_session(panda, grant)
+
+            self.assertEqual(panda.login_calls, [])
+            self.assertFalse(artifact.exists())
+            self.assertEqual(panda.auth_manager._auth_state.token, "short-lived-token")
+            self.assertEqual(
+                client.kwargs,
+                {
+                    "username": "research-user",
+                    "password": "",
+                    "base_url": "http://pandadata.example",
+                },
+            )
+            session.close()
+
+    def test_authentication_failure_exposes_safe_http_category_without_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            panda = RejectingPandaData(Path(temp_dir) / "user.json")
+
+            with self.assertRaises(AuthenticationError) as caught:
+                authenticate(panda, Credentials("research-user", "local-secret"))
+
+        message = str(caught.exception)
+        self.assertIn("HTTP 401", message)
+        self.assertIn("服务端拒绝", message)
+        self.assertNotIn("local-secret", message)
+
+    def test_authentication_uses_sdk_defaults_when_token_state_metadata_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            panda = TokenOnlyPandaData(Path(temp_dir) / "user.json")
+
+            session = authenticate(panda, Credentials("research-user", "local-secret"))
+
+        self.assertEqual(session.grant.access_token, "private-token")
+        self.assertEqual(session.grant.base_url, "http://pandadata.example")
+        self.assertEqual(session.grant.expires_in_seconds, 14400)
 
 
 if __name__ == "__main__":

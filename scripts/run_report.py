@@ -25,7 +25,10 @@ from scripts.analysis import (
     HORIZONS, build_consensus_states, build_eligibility_funnels,
     build_quality_summary, build_rankings, compute_metrics,
 )
-from scripts.auth_session import AuthenticationError, CredentialError, Credentials, authenticate, read_credentials, resolve_credentials
+from scripts.auth_session import (
+    AuthenticationError, CredentialError, Credentials, SessionGrant,
+    adopt_authenticated_session, authenticate, read_credentials, resolve_credentials,
+)
 from scripts.data_pipeline import MARKET_APIS, collect_market_data, normalize_market_frames
 from scripts.event_context import EVENT_APIS, collect_market_events, resolve_event_reference_date
 from scripts.report import render_report
@@ -288,6 +291,24 @@ def _print_progress(message: str) -> None:
     print(f"[PROGRESS] {message}", file=sys.stderr, flush=True)
 
 
+def _progress_status_reporter(destination: Path) -> Callable[[str], None]:
+    """Emit progress to stderr and retain only the latest credential-free status."""
+    destination = Path(destination)
+
+    def report(message: str) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
+            "message": message,
+        }
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(destination)
+        _print_progress(message)
+
+    return report
+
+
 @dataclass(frozen=True)
 class _ProgressRelay:
     host: str
@@ -303,22 +324,19 @@ class _ProgressRelay:
 
     def progress(self, message: str) -> None:
         self._send({'kind': 'progress', 'message': message})
-        if message.startswith('PandaData 连接成功'):
-            print('PandaData connection succeeded.', file=sys.stderr, flush=True)
+        _print_progress(message)
 
-    def auth_failure(self) -> None:
-        self._send({'kind': 'auth_failure'})
-        print(
-            'PandaData connection failed. Please re-enter your username and password.',
-            file=sys.stderr,
-            flush=True,
-        )
+    def auth_failure(self, message: str = 'PandaData 登录失败，请重新输入账号和密码。') -> None:
+        self._send({'kind': 'auth_failure', 'message': message})
+        _print_progress(message)
 
-    def credentials(self, credentials: Credentials) -> None:
+    def authenticated_session(self, grant: SessionGrant) -> None:
         self._send({
-            'kind': 'credentials',
-            'username': credentials.username,
-            'password': credentials.password,
+            'kind': 'authenticated_session',
+            'access_token': grant.access_token,
+            'username': grant.username,
+            'base_url': grant.base_url,
+            'expires_in_seconds': grant.expires_in_seconds,
         })
 
     def complete(self, output: Path, warnings: list[str]) -> None:
@@ -332,24 +350,34 @@ class _ProgressRelay:
         self._send({'kind': 'error', 'message': message})
 
 
-def _handle_parent_event(event: dict[str, object], token: str) -> int | None:
+def _handle_parent_event(
+    event: dict[str, object],
+    token: str,
+    progress_callback: Callable[[str], None] | None = None,
+) -> int | SessionGrant | None:
     if event.get('token') != token:
         return None
+    report_progress = progress_callback or _print_progress
     kind = event.get('kind')
     if kind == 'progress':
-        _print_progress(str(event.get('message', '')))
+        report_progress(str(event.get('message', '')))
         return None
     if kind == 'auth_failure':
-        _print_progress('PandaData connection failed; waiting for a new username and password...')
+        report_progress(str(event.get('message', 'PandaData login failed; waiting for a new username and password...')))
         return None
-    if kind == 'credentials':
+    if kind == 'authenticated_session':
+        access_token = str(event.get('access_token', ''))
         username = str(event.get('username', '')).strip()
-        password = str(event.get('password', ''))
-        if not username or not password:
-            print('PandaData login helper returned incomplete credentials.', file=sys.stderr)
+        base_url = str(event.get('base_url', '')).strip()
+        try:
+            expires_in_seconds = int(event.get('expires_in_seconds', 0))
+        except (TypeError, ValueError):
+            expires_in_seconds = 0
+        if not access_token or not username or not base_url or expires_in_seconds <= 0:
+            print('PandaData login helper returned incomplete session data.', file=sys.stderr)
             return 1
-        _print_progress('PandaData connection succeeded; the main process is continuing...')
-        return Credentials(username=username, password=password)
+        report_progress('PandaData 登录成功，主进程将复用已验证会话。')
+        return SessionGrant(access_token, username, base_url, expires_in_seconds)
     if kind == 'complete':
         output = str(event.get('output', '')).strip()
         if not output:
@@ -499,15 +527,19 @@ def run_workflow(
     env: Mapping[str, str] | None = None,
     *,
     credentials: Credentials | None = None,
+    session_grant: SessionGrant | None = None,
     quality_warnings: list[str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> Path:
     """Authenticate, query PandaData, and create one timestamped offline report."""
     _validate_options(options)
-    active_credentials = credentials
-    if active_credentials is None:
-        active_credentials = read_credentials(os.environ if env is None else env)
-    session = authenticate(panda_module, active_credentials)
+    if session_grant is not None:
+        session = adopt_authenticated_session(panda_module, session_grant)
+    else:
+        active_credentials = credentials
+        if active_credentials is None:
+            active_credentials = read_credentials(os.environ if env is None else env)
+        session = authenticate(panda_module, active_credentials)
     try:
         _notify_progress(progress_callback, "PandaData 连接成功，开始获取数据。")
         markets_payload = {}
@@ -672,7 +704,10 @@ def _build_login_window_command(
     raise OSError(f'interactive login window is unsupported on {sys.platform}')
 
 
-def _launch_login_window(argv: list[str]) -> Credentials | int:
+def _launch_login_window(
+    argv: list[str],
+    progress_callback: Callable[[str], None] | None = None,
+) -> SessionGrant | Credentials | int:
     root = Path(__file__).resolve().parent.parent
     token = secrets.token_urlsafe(32)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -711,7 +746,7 @@ def _launch_login_window(argv: list[str]) -> Credentials | int:
                     event = json.loads(line.decode('utf-8'))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
-                result = _handle_parent_event(event, token)
+                result = _handle_parent_event(event, token, progress_callback)
                 if result is not None:
                     return result
         return int(process.poll() or 1)
@@ -728,11 +763,12 @@ def _run_login_helper(relay: _ProgressRelay | None) -> int:
             credentials = resolve_credentials(
                 {'PANDADATA_USERNAME': '', 'PANDADATA_PASSWORD': ''},
                 interactive=True,
+                status_writer=relay.progress,
             )
             import panda_data
             session = authenticate(panda_data, credentials)
-        except AuthenticationError:
-            relay.auth_failure()
+        except AuthenticationError as exc:
+            relay.auth_failure(str(exc))
             continue
         except CredentialError as exc:
             relay.error(f'PandaData login failed: {exc}')
@@ -741,7 +777,8 @@ def _run_login_helper(relay: _ProgressRelay | None) -> int:
             relay.error(f'PandaData login failed: {exc}')
             return 1
         try:
-            relay.credentials(credentials)
+            relay.progress('PandaData 登录成功，正在启动报告任务...')
+            relay.authenticated_session(session.grant)
         finally:
             session.close()
         return 0
@@ -793,6 +830,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument(
+        "--progress-file",
+        help="write the latest credential-free run status to this local JSON file",
+    )
     parser.add_argument("--progress-host", help=argparse.SUPPRESS)
     parser.add_argument("--progress-port", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--progress-token", help=argparse.SUPPRESS)
@@ -802,6 +843,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(raw_argv)
+    progress_reporter = (
+        _progress_status_reporter(Path(args.progress_file))
+        if args.progress_file
+        else _print_progress
+    )
     relay = None
     if args.progress_host and args.progress_port and args.progress_token:
         relay = _ProgressRelay(args.progress_host, args.progress_port, args.progress_token)
@@ -826,12 +872,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     credentials: Credentials | None = None
     pending_credentials: Credentials | None = None
+    pending_session_grant: SessionGrant | None = None
     quality_warnings: list[str] = []
     interactive = args.interactive_login
     try:
         retry_after_auth_failure = False
         while True:
-            if pending_credentials is not None:
+            session_grant: SessionGrant | None = None
+            if pending_session_grant is not None:
+                session_grant = pending_session_grant
+                pending_session_grant = None
+                credentials = None
+            elif pending_credentials is not None:
                 credentials = pending_credentials
                 pending_credentials = None
             else:
@@ -840,9 +892,14 @@ def main(argv: list[str] | None = None) -> int:
                         resolve_credentials(
                             {"PANDADATA_USERNAME": "", "PANDADATA_PASSWORD": ""},
                             interactive=True,
+                            status_writer=progress_reporter,
                         )
                         if retry_after_auth_failure
-                        else resolve_credentials(os.environ, interactive=interactive)
+                        else resolve_credentials(
+                            os.environ,
+                            interactive=interactive,
+                            status_writer=progress_reporter,
+                        )
                     )
                 except CredentialError:
                     if args.no_login_window or interactive:
@@ -859,16 +916,24 @@ def main(argv: list[str] | None = None) -> int:
                             file=sys.stderr,
                         )
                         return 1
-                    _print_progress('已请求打开 PandaData 登录窗口，等待本地认证...')
-                    login_result = _launch_login_window(raw_argv)
+                    progress_reporter('已请求打开 PandaData 登录窗口，等待本地认证...')
+                    login_result = _launch_login_window(
+                        raw_argv,
+                        progress_callback=progress_reporter,
+                    )
+                    if isinstance(login_result, SessionGrant):
+                        pending_session_grant = login_result
+                        continue
                     if isinstance(login_result, Credentials):
                         pending_credentials = login_result
                         continue
                     return int(login_result or 1)
             if relay is None:
+                progress_reporter("PandaData credentials received; validating login...")
                 _print_progress('宸茶幏鍙栬处鍙峰瘑鐮侊紝姝ｅ湪杩炴帴 PandaData...')
             import panda_data
             if relay is None:
+                progress_reporter("PandaData SDK loaded; validating login...")
                 _print_progress('PandaData SDK 宸插姞杞斤紝姝ｅ湪楠岃瘉鐧诲綍...')
 
             try:
@@ -876,8 +941,9 @@ def main(argv: list[str] | None = None) -> int:
                     options,
                     panda_data,
                     credentials=credentials,
+                    session_grant=session_grant,
                     quality_warnings=quality_warnings,
-                    progress_callback=relay.progress if relay else _print_progress,
+                    progress_callback=relay.progress if relay else progress_reporter,
                 )
             except AuthenticationError:
                 if not interactive:
@@ -890,6 +956,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             break
     except AuthenticationError as exc:
+        if relay is None:
+            progress_reporter("PandaData connection failed; please retry authentication.")
         if relay is not None:
             relay.error('PandaData 连接失败')
             print('PandaData connection failed.', file=sys.stderr, flush=True)
@@ -897,6 +965,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f'PandaData 连接失败：{exc}', file=sys.stderr, flush=True)
         return 1
     except CredentialError as exc:
+        if relay is None:
+            progress_reporter("PandaData login failed; please retry authentication.")
         if relay is not None:
             relay.error(f'PandaData login failed: {exc}')
             print('PandaData login failed.', file=sys.stderr, flush=True)
@@ -904,6 +974,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f'Report generation failed: {exc}', file=sys.stderr)
         return 1
     except Exception as exc:
+        if relay is None:
+            progress_reporter("报告生成失败，请查看本地终端。")
         if relay is not None:
             relay.error(f'Report generation failed: {exc}')
             return 1

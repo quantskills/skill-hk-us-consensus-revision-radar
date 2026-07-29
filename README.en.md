@@ -50,6 +50,8 @@ python -m scripts.run_report --market both --desktop-login-window
 ```
 
 - Only plain 11-digit mainland China mobile usernames receive the `86` prefix automatically; other account names are unchanged.
+- After the password is submitted, the terminal immediately reports that PandaData login is in progress, then reports success or failure; a failed attempt requires both credentials to be entered again.
+- With the local login window, only a verified short-lived session token is relayed to the main process; the password is not relayed and no second login request is made.
 - Authentication failure re-prompts for both username and password without reusing failed credentials.
 - Use `--no-login-window` only for unattended environments where a visible login window is not permitted.
 
