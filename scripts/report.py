@@ -948,7 +948,7 @@ def _data_completeness_fallback(payload: dict) -> str:
         context = market.get("event_context") or {}
         context = context if isinstance(context, dict) else {}
         event_summary = "；".join(
-            f"{label} {value(context.get(key, "—"))}"
+            f'{label} {value(context.get(key, "—"))}'
             for label, key in (
                 ("请求证券", "requested_symbol_count"),
                 ("接口返回记录", "returned_rows"),
