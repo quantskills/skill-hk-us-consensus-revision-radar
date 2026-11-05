@@ -144,3 +144,7 @@ Maintained by community contributors through the repository issue and review pro
 - 八种规则化状态为：持续上修、上修加速、上修减速、趋势反转待核验、目标价与评级共振改善、目标价与评级信号冲突、高分歧待核验、覆盖变化待核验。状态只用于解读，不改变榜单排序，不是分析师个人修订，也不构成投资建议。
 - 评级均值越低代表评级更积极（绝对水平）。评级变化公式为“历史评级均值 − 当前评级均值”；历史评级均值 − 当前评级均值越大代表评级改善/更积极（变化）。高分歧以有效核心样本 P75 为阈值；覆盖变化沿用既有绝对变化不少于 2 且变化率不少于 20% 的规则。
 - PandaData 聚合数据不提供精确历史时间戳或个人分析师信息；因此状态 evidence 只能说明聚合证据，不能推断个人修订、修订时间或分析师广度。
+
+## Pandadata compatibility
+
+[Pandadata 1.0.6 compatibility](references/pandadata-compatibility.md) — exact SDK baseline, validation scope, and shared guidance for all supported agent runtimes.

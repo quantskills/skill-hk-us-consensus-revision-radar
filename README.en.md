@@ -140,3 +140,6 @@ PandaData is the **only raw data source** for this project; no other provider is
 ## Contributing and license
 
 Issues and review feedback are welcome. This is an unreviewed QuantSkills Community Project; the PandaData SDK and data service remain subject to their own terms. Code is released under the [GNU GPL v3.0 (GPL-3.0-only)](LICENSE).
+
+
+Pandadata compatibility maintenance: [abgyjaguo](https://github.com/abgyjaguo). Existing authorship is retained.
